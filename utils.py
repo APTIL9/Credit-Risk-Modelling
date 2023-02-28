@@ -1,98 +1,103 @@
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, auc
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.metrics import roc_curve, roc_auc_score
+from sklearn.model_selection import train_test_split
 
 def clean_data(df):
-    """
-    Clean and preprocess the loan data.
+    # Fill missing values with median or mode
+    df['person_emp_length'].fillna(df['person_emp_length'].median(), inplace=True)
+    df['loan_int_rate'].fillna(df['loan_int_rate'].mode()[0], inplace=True)
 
-    Parameters:
-    df (pandas.DataFrame): the loan dataframe
-
-    Returns:
-    pandas.DataFrame: the cleaned loan dataframe
-    """
-    # Drop Loan ID and Customer ID columns
-    df.drop(['Loan ID', 'Customer ID'], axis=1, inplace=True)
-
-    # Convert Current Loan Amount and Credit Score to numeric data type
-    df['Current Loan Amount'] = pd.to_numeric(df['Current Loan Amount'], errors='coerce')
-    df['Credit Score'] = pd.to_numeric(df['Credit Score'], errors='coerce')
-
-    # Fill missing values in Current Loan Amount and Credit Score with mean
-    df['Current Loan Amount'].fillna(df['Current Loan Amount'].mean(), inplace=True)
-    df['Credit Score'].fillna(df['Credit Score'].mean(), inplace=True)
-
-    # Replace missing values in Months since last delinquent with 0
-    df['Months since last delinquent'].fillna(0, inplace=True)
-
-    # Convert Years in current job to numeric data type and replace missing values with mode
-    df['Years in current job'] = pd.to_numeric(df['Years in current job'].str.extract('(\d+)'), errors='coerce')
-    df['Years in current job'].fillna(df['Years in current job'].mode()[0], inplace=True)
-
-    # Replace missing values in Bankruptcies and Tax Liens with 0
-    df['Bankruptcies'].fillna(0, inplace=True)
-    df['Tax Liens'].fillna(0, inplace=True)
+    # Drop unnecessary columns
+    df.drop(['cb_person_default_on_file'], axis=1, inplace=True)
 
     return df
 
-def eda(df):
-    """
-    Perform exploratory data analysis on the loan data.
-
-    Parameters:
-    df (pandas.DataFrame): the loan dataframe
-
-    Returns:
-    pandas.DataFrame: the exploratory data analysis dataframe
-    """
-    # Create a new dataframe for EDA
-    eda_df = pd.DataFrame()
-
-    # Add Loan Status value counts to EDA dataframe
-    eda_df['Loan Status'] = df['Loan Status'].value_counts()
-
-    # Plot a histogram of Current Loan Amount
-    plt.hist(df['Current Loan Amount'], bins=20)
-    plt.xlabel('Current Loan Amount')
-    plt.ylabel('Count')
-    plt.title('Histogram of Current Loan Amount')
+def explore_data(df):
+    # Plot histograms of numerical variables
+    df.hist(bins=20, figsize=(15, 10))
     plt.show()
 
-    # Plot a boxplot of Credit Score
-    sns.boxplot(df['Credit Score'])
-    plt.xlabel('Credit Score')
-    plt.title('Boxplot of Credit Score')
+    # Plot scatterplots of numerical variables
+    sns.pairplot(df, hue='loan_status')
     plt.show()
 
-    # Add mean and median of Credit Score to EDA dataframe
-    eda_df.loc['Credit Score Mean'] = df['Credit Score'].mean()
-    eda_df.loc['Credit Score Median'] = df['Credit Score'].median()
+    # Plot correlation matrix
+    corr_matrix = df.corr()
+    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm')
+    plt.show()
 
-    # Add Home Ownership value counts to EDA dataframe
-    eda_df['Home Ownership'] = df['Home Ownership'].value_counts()
+def train_models(df):
+    # One-hot encode categorical variables
+    df_encoded = pd.get_dummies(df, columns=['person_home_ownership', 'loan_intent', 'loan_grade'])
 
-    return eda_df
+    # Split data into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(df_encoded.drop('loan_status', axis=1),
+                                                        df_encoded['loan_status'],
+                                                        test_size=0.2,
+                                                        random_state=42)
 
-def plot_roc_curve(model, X_test, y_test, model_name):
-    # predict probabilities for the positive class
-    y_prob = model.predict_proba(X_test)[:, 1]
-    
-    # calculate ROC curve and AUC
-    fpr, tpr, thresholds = roc_curve(y_test, y_prob)
-    roc_auc = auc(fpr, tpr)
-    
-    # plot ROC curve
-    plt.plot(fpr, tpr, lw=2, alpha=0.8,
-             label='%s (AUC = %0.2f)' % (model_name, roc_auc))
-    plt.plot([0, 1], [0, 1], linestyle='--', lw=2, color='r',
-             label='Random Chance', alpha=.8)
+    # Train logistic regression model
+    lr_model = LogisticRegression()
+    lr_model.fit(X_train, y_train)
+
+    # Train random forests model
+    rf_model = RandomForestClassifier(n_estimators=100)
+    rf_model.fit(X_train, y_train)
+
+    # Train XGBoost model
+    xgb_model = XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=3)
+    xgb_model.fit(X_train, y_train)
+
+    # Make predictions on test set
+    lr_pred = lr_model.predict_proba(X_test)[:, 1]
+    rf_pred = rf_model.predict_proba(X_test)[:, 1]
+    xgb_pred = xgb_model.predict_proba(X_test)[:, 1]
+
+    # Evaluate models using ROC-AUC score and plot ROC curves
+    evaluate_models(X_test, y_test, lr_pred, rf_pred, xgb_pred)
+ 
+def plot_roc_curve(y_true, y_pred, model_name):
+    fpr, tpr, thresholds = roc_curve(y_true, y_pred)
+    auc_score = roc_auc_score(y_true, y_pred)
+
+    plt.plot(fpr, tpr, label=f'{model_name} (AUC-ROC = {auc_score:.2f})')
+    plt.plot([0, 1], [0, 1], linestyle='--', label='Random Guessing')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curve')
+    plt.legend()
+    plt.show()
+
+def evaluate_models(X_test, y_test, lr_pred, rf_pred, xgb_pred):
+    # Calculate ROC-AUC score for each model
+    lr_auc = roc_auc_score(y_test, lr_pred)
+    rf_auc = roc_auc_score(y_test, rf_pred)
+    xgb_auc = roc_auc_score(y_test, xgb_pred)
+
+    # Print ROC-AUC scores
+    print(f"Logistic Regression ROC-AUC score: {lr_auc:.3f}")
+    print(f"Random Forests ROC-AUC score: {rf_auc:.3f}")
+    print(f"XGBoost ROC-AUC score: {xgb_auc:.3f}")
+
+    # Plot ROC curves
+    fpr_lr, tpr_lr, _ = roc_curve(y_test, lr_pred)
+    fpr_rf, tpr_rf, _ = roc_curve(y_test, rf_pred)
+    fpr_xgb, tpr_xgb, _ = roc_curve(y_test, xgb_pred)
+
+    plt.plot(fpr_lr, tpr_lr, label=f"Logistic Regression (AUC = {lr_auc:.3f})")
+    plt.plot(fpr_rf, tpr_rf, label=f"Random Forests (AUC = {rf_auc:.3f})")
+    plt.plot(fpr_xgb, tpr_xgb, label=f"XGBoost (AUC = {xgb_auc:.3f})")
+
+    plt.plot([0, 1], [0, 1], 'k--')
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('Receiver operating characteristic (ROC) Curve')
+    plt.title('Receiver Operating Characteristic (ROC) Curve')
     plt.legend(loc="lower right")
     plt.show()
-
